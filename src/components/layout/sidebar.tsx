@@ -5,12 +5,13 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   ArrowLeftRight,
-  Wallet,
+  CalendarClock,
   CreditCard,
   HandCoins,
   ChartPie,
   Settings,
   LogOut,
+  Wallet,
   Tags,
   X,
 } from "lucide-react";
@@ -37,6 +38,11 @@ const menu = [
     label: "Transferencias",
     href: "/dashboard/transferencias",
     icon: ArrowLeftRight,
+  },
+  {
+    label: "Pagos recurrentes",
+    href: "/dashboard/recurrentes",
+    icon: CalendarClock,
   },
   {
     label: "Cuentas",
@@ -93,20 +99,24 @@ export function Sidebar({ open, onClose }: Props) {
         `}
       >
         <div className="flex h-20 items-center justify-between border-b border-slate-800 px-6">
-          <div>
-            <h1 className="text-2xl font-bold text-emerald-400">
-              MiPistiyo.
+          <Link
+            href="/dashboard"
+            aria-label="Ir al Dashboard de MiPistiyo"
+            className="group block rounded-lg transition-opacity hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-400"
+          >
+            <h1 className="text-2xl font-bold text-emerald-400 transition-colors group-hover:text-emerald-300">
+              MiPistiyo
             </h1>
+
             <p className="text-xs text-slate-500">
               Tu pisto, bajo control.
             </p>
-          </div>
+          </Link>
 
           <button
             onClick={onClose}
             className="text-slate-400 md:hidden"
-            aria-label="Cerrar menú"
-          >
+            aria-label="Cerrar menú">
             <X size={22} />
           </button>
         </div>
@@ -141,8 +151,7 @@ export function Sidebar({ open, onClose }: Props) {
           <form action={signOut}>
             <button
               type="submit"
-              className="flex w-full items-center gap-3 rounded-lg px-4 py-3 text-sm text-red-400 hover:bg-red-500/10"
-            >
+              className="flex w-full items-center gap-3 rounded-lg px-4 py-3 text-sm text-red-400 hover:bg-red-500/10">
               <LogOut size={19} />
               Cerrar sesión
             </button>

@@ -29,8 +29,7 @@ export function AppShell({
           <button
             onClick={() => setMenuOpen(true)}
             className="text-slate-300 md:hidden"
-            aria-label="Abrir menú"
-          >
+            aria-label="Abrir menú">
             <Menu size={24} />
           </button>
 
