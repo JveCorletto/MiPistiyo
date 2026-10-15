@@ -1,11 +1,11 @@
 import { Suspense } from "react";
 import { connection } from "next/server";
-import { Banknote, Landmark, Wallet, CheckCircle2, Ban, } from "lucide-react";
-import { AccountCard, type Account, } from "@/components/accounts/account-card";
-
 import { createClient } from "@/lib/supabase/server";
-import { AccountForm } from "@/components/accounts/account-form";
+import { Banknote, Landmark, Wallet, CheckCircle2, Ban, } from "lucide-react";
+
 import { toggleAccount } from "./actions";
+import { AccountCard, type Account, } from "@/components/accounts/account-card";
+import { CreateAccountModal } from "@/components/accounts/create-account-modal";
 
 const currencyFormatter = new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -93,7 +93,7 @@ async function AccountsContent() {
                 </div>
             </div>
 
-            <div className="grid items-start gap-6 xl:grid-cols-[1fr_380px]">
+            <div className="space-y-4">
                 <section className="space-y-4">
                     <h2 className="text-xl font-semibold">
                         Mis cuentas registradas
@@ -126,37 +126,37 @@ async function AccountsContent() {
                         </div>
                     )}
                 </section>
-
-                <section>
-                    <AccountForm />
-                </section>
             </div>
         </div>
     );
 }
 
+
 export default function AccountsPage() {
-    return (
-        <div className="space-y-6">
-            <div>
-                <h1 className="text-3xl font-bold">
-                    Mis Cuentas
-                </h1>
-
-                <p className="mt-2 text-slate-400">
-                    Administra tu efectivo, bancos y billeteras.
-                </p>
-            </div>
-
-            <Suspense
-                fallback={
-                    <p className="text-slate-400">
-                        Cargando cuentas...
-                    </p>
-                }
-            >
-                <AccountsContent />
-            </Suspense>
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold">
+            Mis Cuentas
+          </h1>
+          <p className="mt-2 text-slate-400">
+            Administra tu efectivo, bancos y billeteras.
+          </p>
         </div>
-    );
+
+        <CreateAccountModal />
+      </div>
+
+      <Suspense
+        fallback={
+          <p className="text-slate-400">
+            Cargando cuentas...
+          </p>
+        }
+      >
+        <AccountsContent />
+      </Suspense>
+    </div>
+  );
 }

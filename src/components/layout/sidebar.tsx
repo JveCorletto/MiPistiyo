@@ -11,6 +11,7 @@ import {
   ChartPie,
   Settings,
   LogOut,
+  Tags,
   X,
 } from "lucide-react";
 
@@ -26,6 +27,11 @@ const menu = [
     label: "Movimientos",
     href: "/dashboard/movimientos",
     icon: ArrowLeftRight,
+  },
+  {
+    label: "Categorías",
+    href: "/dashboard/categorias",
+    icon: Tags,
   },
   {
     label: "Cuentas",
@@ -113,10 +119,9 @@ export function Sidebar({ open, onClose }: Props) {
                 className={`
                   flex items-center gap-3 rounded-lg
                   px-4 py-3 text-sm transition-colors
-                  ${
-                    active
-                      ? "bg-emerald-500/15 font-semibold text-emerald-400"
-                      : "text-slate-400 hover:bg-slate-800 hover:text-white"
+                  ${active
+                    ? "bg-emerald-500/15 font-semibold text-emerald-400"
+                    : "text-slate-400 hover:bg-slate-800 hover:text-white"
                   }
                 `}
               >
