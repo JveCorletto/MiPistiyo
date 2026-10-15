@@ -24,14 +24,19 @@ const menu = [
     icon: LayoutDashboard,
   },
   {
+    label: "Categorías",
+    href: "/dashboard/categorias",
+    icon: Tags,
+  },
+  {
     label: "Movimientos",
     href: "/dashboard/movimientos",
     icon: ArrowLeftRight,
   },
   {
-    label: "Categorías",
-    href: "/dashboard/categorias",
-    icon: Tags,
+    label: "Transferencias",
+    href: "/dashboard/transferencias",
+    icon: ArrowLeftRight,
   },
   {
     label: "Cuentas",
