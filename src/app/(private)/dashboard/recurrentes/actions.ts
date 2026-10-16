@@ -44,7 +44,7 @@ async function context() {
   return { supabase, user: error ? null : user };
 }
 
-/** Crea una regla. Editar no reprograma fechas ya generadas: sólo nombre, importe y notas. */
+/** Alta de regla y edición transaccional de su programación (SQL 009). */
 export async function saveRecurring(
   _previous: RecurringActionState,
   form: FormData,
@@ -63,14 +63,40 @@ export async function saveRecurring(
   if (!user) return fail("Tu sesión expiró. Volvé a iniciar sesión.");
 
   if (id) {
-    const { data, error } = await supabase.from("recurring_transactions")
-      .update({ name, amount, notes: notes || null })
-      .eq("id", id).eq("user_id", user.id).neq("status", "ENDED")
-      .select("id").maybeSingle();
+    const changeSchedule = field(form, "reschedule") === "true";
+    const frequency = field(form, "frequency");
+    const nextOn = field(form, "next_on");
+
+    if (changeSchedule) {
+      if (!FREQUENCIES.some((value) => value === frequency) || !validDate(nextOn)) {
+        return fail("Seleccioná una frecuencia y una fecha válidas.");
+      }
+      const dateToday = todayInElSalvador();
+      const allowedMin = new Date(`${dateToday}T00:00:00.000Z`);
+      allowedMin.setUTCDate(allowedMin.getUTCDate() - (frequency === "DAILY" ? 30 : 90));
+      const allowedMax = new Date(`${dateToday}T00:00:00.000Z`);
+      allowedMax.setUTCDate(allowedMax.getUTCDate() + 1825);
+      if (nextOn < allowedMin.toISOString().slice(0, 10) ||
+          nextOn > allowedMax.toISOString().slice(0, 10)) {
+        return fail("Elegí una fecha entre hace 90 días y los próximos cinco años.");
+      }
+    }
+
+    const { data, error } = await supabase.rpc("update_recurring_rule", {
+      p_rule: id,
+      p_name: name,
+      p_amount: amount,
+      p_notes: notes || null,
+      p_change_schedule: changeSchedule,
+      p_frequency: changeSchedule ? frequency : null,
+      p_next_on: changeSchedule ? nextOn : null,
+    });
     if (error) return fail(error.message);
-    if (!data) return fail("La regla no existe o fue finalizada.");
     refresh();
-    return done("Recurrencia actualizada. Los pagos pendientes utilizarán el nuevo importe.");
+    revalidatePath("/dashboard/notificaciones");
+    return done(data === true
+      ? "Recurrencia reprogramada. Los vencimientos pendientes se recalcularán; los pagos ya procesados se conservan."
+      : "Recurrencia actualizada correctamente.");
   }
 
   const kind = field(form, "kind");

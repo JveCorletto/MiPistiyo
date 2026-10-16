@@ -3,6 +3,7 @@
 import { useActionState, useCallback, useEffect, useState, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
 import Link from "next/link";
+import { DatePicker } from "@/components/ui/date-picker";
 import { useRouter } from "next/navigation";
 import {
   AlertCircle, ArrowDownLeft, ArrowUpRight, CalendarClock, CheckCircle2,
@@ -29,7 +30,6 @@ export type RecurringRule = {
 export type RecurringOccurrence = {
   id: string; recurring_id: string; scheduled_on: string;
   status: "PENDING" | "CONFIRMED" | "SKIPPED";
-  is_reversed?: boolean;
   rule: RecurringRule;
 };
 export type DebtReminder = {
@@ -109,9 +109,9 @@ function Modal({ title, children, onClose }: { title: string; children: ReactNod
   </div>;
 }
 
-function RuleForm({ dialog, categories, sources, today, onSaved }: {
+function RuleForm({ dialog, categories, sources, today, firstPendingOn, onSaved }: {
   dialog: Dialog; categories: CategoryOption[]; sources: SourceOption[];
-  today: string; onSaved: (message: string) => void;
+  today: string; firstPendingOn: string | null; onSaved: (message: string) => void;
 }) {
   const isEdit = dialog.type === "EDIT";
   const rule = dialog.type === "EDIT" ? dialog.rule : null;
@@ -121,7 +121,7 @@ function RuleForm({ dialog, categories, sources, today, onSaved }: {
   const [sourceId, setSourceId] = useState(rule?.card_id ?? rule?.account_id ?? "");
   const [categoryId, setCategoryId] = useState(rule?.category_id ?? "");
   const [frequency, setFrequency] = useState<Frequency>(rule?.frequency ?? "MONTHLY");
-  const [firstDate, setFirstDate] = useState(rule?.next_on ?? today);
+  const [editSchedule, setEditSchedule] = useState(false);
   useEffect(() => { if (state.success) onSaved(state.success); }, [state.success, onSaved]);
 
   const availableCategories = categories.filter((item) => item.kind === kind && item.is_active);
@@ -130,8 +130,8 @@ function RuleForm({ dialog, categories, sources, today, onSaved }: {
   return <form action={formAction} className="space-y-4">
     <input type="hidden" name="rule_id" value={rule?.id ?? ""} />
     {isEdit ? <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-xs leading-relaxed text-amber-200">
-      Podés modificar el nombre, monto y notas. Los vencimientos pendientes usarán el nuevo monto.
-      Para cambiar fechas, frecuencia, origen o categoría, finalizá esta regla y creá otra.
+      Podés editar el nombre, importe y notas. También podés corregir la fecha o frecuencia.
+      Al reprogramar, solo se reemplazan vencimientos <strong>pendientes</strong>; los confirmados y omitidos no se modifican.
     </div> : <div className="rounded-xl border border-slate-700 bg-slate-950/60 p-3 text-sm text-slate-300">
       Programar no descuenta dinero. Confirmar cada vencimiento sí registra un movimiento real.
     </div>}
@@ -181,18 +181,31 @@ function RuleForm({ dialog, categories, sources, today, onSaved }: {
           {availableSources.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
         </select>
       </div>
+    </>} 
+    {isEdit && <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-slate-700 bg-slate-950/50 p-3 text-sm text-slate-200">
+      <input type="checkbox" checked={editSchedule} onChange={(event) => setEditSchedule(event.target.checked)}
+        className="h-4 w-4 accent-emerald-500"/>
+      Cambiar fecha o frecuencia de la recurrencia
+    </label>}
+    {isEdit && <input type="hidden" name="reschedule" value={editSchedule ? "true" : "false"}/>}
+    {(!isEdit || editSchedule) && <div className="space-y-2">
       <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="block text-sm text-slate-300">Frecuencia
           <select className={fieldClass} name="frequency" value={frequency} onChange={(event) => setFrequency(event.target.value as Frequency)}>
             {Object.entries(frequencyLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
         </label>
-        <label className="block text-sm text-slate-300">Primer vencimiento
-          <input className={fieldClass} type="date" name="next_on" required min={today} value={firstDate} onChange={(event) => setFirstDate(event.target.value)}/>
-        </label>
+        <div className="min-w-0 text-sm text-slate-300">
+          <span className="block mb-1">{isEdit ? "Nueva fecha de vencimiento" : "Primer vencimiento"}</span>
+          <DatePicker name="next_on" defaultValue={isEdit ? (firstPendingOn ?? rule?.next_on ?? today) : today}/>
+        </div>
       </div>
-      <p className="text-xs leading-relaxed text-slate-500">En pagos mensuales o anuales, el día seleccionado será el día de referencia. Si el mes no lo tiene (ej.: 31 de febrero), se usa el último día de ese mes.</p>
-    </>}
+      <p className="text-xs leading-relaxed text-slate-500">
+        En pagos mensuales o anuales, el día seleccionado será la referencia; si un mes no lo tiene, se utiliza su último día.
+        {isEdit ? " Al guardar se reemplazarán los vencimientos pendientes anteriores. Esto no cobra ni devuelve dinero." : ""}
+      </p>
+    </div>}
+
     <label className="block text-sm text-slate-300">Notas opcionales
       <textarea className={`${fieldClass} min-h-20 resize-y`} name="notes" maxLength={1000} rows={2} placeholder="Detalles del pago..." defaultValue={rule?.notes ?? ""}/>
     </label>
@@ -371,8 +384,8 @@ export function RecurringManager({ today, horizon, generationError, rules, pendi
         {recent.length === 0 ? <p className="mt-5 text-sm text-slate-500">Todavía no has confirmado ni omitido vencimientos.</p> :
           <div className="mt-4 divide-y divide-slate-800">{recent.map((item) => <div key={item.id} className="flex items-center justify-between gap-2 py-2.5">
             <div><p className="text-sm text-white">{item.rule.name}</p><p className="text-xs text-slate-500">{dateLabel(item.scheduled_on)}</p></div>
-            <span className={`text-xs ${item.is_reversed ? "text-rose-400" : item.status === "CONFIRMED" ? "text-emerald-400" : "text-amber-400"}`}>
-              {item.is_reversed ? "Anulado" : item.status === "CONFIRMED" ? "Confirmado" : "Omitido"}
+            <span className={`text-xs ${item.status === "CONFIRMED" ? "text-emerald-400" : "text-amber-400"}`}>
+              {item.status === "CONFIRMED" ? "Confirmado" : "Omitido"}
             </span>
           </div>)}</div>}
       </section>
@@ -382,7 +395,9 @@ export function RecurringManager({ today, horizon, generationError, rules, pendi
     </div>
     {dialog && <Modal title={dialog.type === "CREATE" ? "Nueva recurrencia" : "Editar recurrencia"} onClose={() => setDialog(null)}>
       <RuleForm key={dialog.type === "CREATE" ? "new" : dialog.rule.id}
-        dialog={dialog} categories={categories} sources={sources} today={today} onSaved={onCompleted}/>
+        dialog={dialog} categories={categories} sources={sources} today={today}
+        firstPendingOn={dialog.type === "EDIT" ? pending.find((item) => item.recurring_id === dialog.rule.id)?.scheduled_on ?? null : null}
+        onSaved={onCompleted}/>
     </Modal>}
   </div>;
 }

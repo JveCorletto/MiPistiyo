@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Menu, CircleUserRound } from "lucide-react";
 import { Sidebar } from "./sidebar";
+import { NotificationBell } from "@/components/notifications/notification-bell";
 
 type Props = {
   children: React.ReactNode;
@@ -38,6 +39,7 @@ export function AppShell({
           </span>
 
           <div className="flex items-center gap-3">
+            <NotificationBell />
             <div className="hidden text-right sm:block">
               <p className="text-sm font-medium">
                 {displayName}
