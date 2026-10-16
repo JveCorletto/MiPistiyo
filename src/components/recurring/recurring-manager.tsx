@@ -29,6 +29,7 @@ export type RecurringRule = {
 export type RecurringOccurrence = {
   id: string; recurring_id: string; scheduled_on: string;
   status: "PENDING" | "CONFIRMED" | "SKIPPED";
+  is_reversed?: boolean;
   rule: RecurringRule;
 };
 export type DebtReminder = {
@@ -370,8 +371,8 @@ export function RecurringManager({ today, horizon, generationError, rules, pendi
         {recent.length === 0 ? <p className="mt-5 text-sm text-slate-500">Todavía no has confirmado ni omitido vencimientos.</p> :
           <div className="mt-4 divide-y divide-slate-800">{recent.map((item) => <div key={item.id} className="flex items-center justify-between gap-2 py-2.5">
             <div><p className="text-sm text-white">{item.rule.name}</p><p className="text-xs text-slate-500">{dateLabel(item.scheduled_on)}</p></div>
-            <span className={`text-xs ${item.status === "CONFIRMED" ? "text-emerald-400" : "text-amber-400"}`}>
-              {item.status === "CONFIRMED" ? "Confirmado" : "Omitido"}
+            <span className={`text-xs ${item.is_reversed ? "text-rose-400" : item.status === "CONFIRMED" ? "text-emerald-400" : "text-amber-400"}`}>
+              {item.is_reversed ? "Anulado" : item.status === "CONFIRMED" ? "Confirmado" : "Omitido"}
             </span>
           </div>)}</div>}
       </section>

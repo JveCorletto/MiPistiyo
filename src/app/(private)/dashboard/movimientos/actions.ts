@@ -136,3 +136,57 @@ export async function createMovement(
         : "Movimiento registrado correctamente.",
   };
 }
+export type CancelMovementState = { error: string | null; success: string | null };
+
+/** Solo se anulan movimientos propios mediante las RPC auditables del esquema. */
+export async function cancelMovement(
+  _previous: CancelMovementState,
+  formData: FormData
+): Promise<CancelMovementState> {
+  const fail = (error: string): CancelMovementState => ({ error, success: null });
+  const id = String(formData.get("id") ?? "");
+  const origin = String(formData.get("origin") ?? "");
+  const reason = String(formData.get("reason") ?? "").trim();
+  const key = String(formData.get("idempotency_key") ?? "");
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  if (!uuid.test(id) || !["OPERATION", "HISTORICAL"].includes(origin))
+    return fail("Movimiento no válido.");
+  if (reason.length < 5 || reason.length > 1000)
+    return fail("Explicá el motivo de la anulación (entre 5 y 1000 caracteres).");
+  if (origin === "OPERATION" && !uuid.test(key))
+    return fail("Clave de confirmación inválida.");
+
+  const supabase = await createClient();
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError || !user) return fail("Tu sesión ha expirado.");
+
+  let error: { message: string } | null = null;
+  if (origin === "HISTORICAL") {
+    ({ error } = await supabase.rpc("void_historical_transaction", {
+      p_historical: id,
+      p_reason: reason,
+    }));
+  } else {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/El_Salvador", year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(new Date());
+    const part = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+    const today = `${part("year")}-${part("month")}-${part("day")}`;
+    ({ error } = await supabase.rpc("reverse_operation", {
+      p_original: id,
+      p_effective_on: today,
+      p_reason: reason,
+      p_idempotency_key: key,
+    }));
+  }
+  if (error) return fail(error.message);
+
+  for (const path of [
+    "/dashboard", "/dashboard/movimientos", "/dashboard/cuentas",
+    "/dashboard/tarjetas", "/dashboard/prestamos", "/dashboard/presupuestos",
+    "/dashboard/transferencias", "/dashboard/recurrentes",
+  ]) revalidatePath(path);
+
+  return { error: null, success: "Movimiento anulado correctamente." };
+}

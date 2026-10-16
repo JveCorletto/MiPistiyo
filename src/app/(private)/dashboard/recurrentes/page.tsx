@@ -22,6 +22,7 @@ type DbRule = {
 type DbOccurrence = {
   id: string; recurring_id: string; scheduled_on: string;
   status: "PENDING" | "CONFIRMED" | "SKIPPED";
+  operation_id: string | null;
 };
 type DbCategory = { id: string; kind: "INCOME" | "EXPENSE"; name: string; is_active: boolean };
 type DbAccount = { id: string; name: string; is_active: boolean };
@@ -80,11 +81,11 @@ async function RecurringContent() {
       .select("id,name,kind,category_id,amount,account_id,card_id,frequency,anchor_day,next_on,status,notes")
       .eq("user_id", user.id).order("created_at", { ascending: false }).limit(200),
     supabase.from("recurring_occurrences")
-      .select("id,recurring_id,scheduled_on,status")
+      .select("id,recurring_id,scheduled_on,status,operation_id")
       .eq("user_id", user.id).eq("status", "PENDING")
       .lte("scheduled_on", horizon).order("scheduled_on", { ascending: true }).limit(200),
     supabase.from("recurring_occurrences")
-      .select("id,recurring_id,scheduled_on,status")
+      .select("id,recurring_id,scheduled_on,status,operation_id")
       .eq("user_id", user.id).in("status", ["CONFIRMED", "SKIPPED"])
       .order("scheduled_on", { ascending: false }).limit(20),
     supabase.from("categories").select("id,name,kind,is_active")
@@ -104,6 +105,21 @@ async function RecurringContent() {
       No se pudo cargar el módulo de recurrencias: {queryError.message}
     </p>;
   }
+
+  const recentRows = (recentQuery.data ?? []) as DbOccurrence[];
+  const confirmedOperations = recentRows
+    .filter((row) => row.status === "CONFIRMED" && row.operation_id)
+    .map((row) => row.operation_id as string);
+  const reversalResult = confirmedOperations.length
+    ? await supabase.from("operations").select("reversal_of")
+        .eq("user_id", user.id).in("reversal_of", confirmedOperations)
+    : { data: [], error: null };
+  if (reversalResult.error) {
+    return <p role="alert" className="rounded-xl bg-rose-500/10 p-5 text-rose-300">
+      No se pudieron consultar las anulaciones de recurrencias: {reversalResult.error.message}
+    </p>;
+  }
+  const reversedOperations = new Set((reversalResult.data ?? []).map((row) => row.reversal_of));
 
   const ruleRows = (rulesQuery.data ?? []) as DbRule[];
   const categoryRows = (categoriesQuery.data ?? []) as DbCategory[];
@@ -126,7 +142,9 @@ async function RecurringContent() {
   function withRule(rows: DbOccurrence[]): RecurringOccurrence[] {
     return rows.flatMap((row) => {
       const rule = byRule.get(row.recurring_id);
-      return rule ? [{ ...row, rule }] : [];
+      return rule ? [{ ...row, rule,
+        is_reversed: row.operation_id ? reversedOperations.has(row.operation_id) : false,
+      }] : [];
     });
   }
 
@@ -160,7 +178,7 @@ async function RecurringContent() {
     generationError={generated.error?.message ?? null}
     rules={rules}
     pending={withRule((pendingQuery.data ?? []) as DbOccurrence[])}
-    recent={withRule((recentQuery.data ?? []) as DbOccurrence[])}
+    recent={withRule(recentRows)}
     categories={categories}
     sources={sources}
     reminders={reminders}

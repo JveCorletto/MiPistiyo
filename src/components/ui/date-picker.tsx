@@ -12,6 +12,9 @@ type DatePickerProps = {
     name: string;
     defaultValue?: string;
     disabled?: boolean;
+    allowEmpty?: boolean;
+    placeholder?: string;
+    ariaLabel?: string;
 };
 
 function getTodayInElSalvador() {
@@ -32,6 +35,9 @@ export function DatePicker({
     name,
     defaultValue,
     disabled = false,
+    allowEmpty = false,
+    placeholder = "Seleccionar fecha",
+    ariaLabel = "Seleccionar fecha",
 }: DatePickerProps) {
     const [selected, setSelected] = useState<Date | undefined>();
     const [open, setOpen] = useState(false);
@@ -39,13 +45,13 @@ export function DatePicker({
     const containerRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
-        const value = defaultValue ?? getTodayInElSalvador();
-        const parsed = parseISO(value);
+        // En filtros se permite dejar la fecha vacía; el formulario de
+        // movimientos conserva el comportamiento anterior (hoy).
+        const value = defaultValue || (allowEmpty ? "" : getTodayInElSalvador());
+        const parsed = value ? parseISO(value) : undefined;
 
-        if (isValid(parsed)) {
-            setSelected(parsed);
-        }
-    }, [defaultValue]);
+        setSelected(parsed && isValid(parsed) ? parsed : undefined);
+    }, [defaultValue, allowEmpty]);
 
     useEffect(() => {
         if (!open) return;
@@ -82,7 +88,7 @@ export function DatePicker({
         ? format(selected, "dd 'de' MMMM 'de' yyyy", {
             locale: es,
         })
-        : "Seleccionar fecha";
+        : placeholder;
 
     return (
         <div ref={containerRef} className="relative min-w-0 w-full">
@@ -97,6 +103,7 @@ export function DatePicker({
                 disabled={disabled}
                 onClick={() => setOpen((previous) => !previous)}
                 aria-expanded={open}
+                aria-label={ariaLabel}
                 aria-haspopup="dialog"
                 className="flex w-full items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-left text-sm text-white outline-none transition hover:border-emerald-500 disabled:opacity-50"
             >
@@ -154,6 +161,18 @@ export function DatePicker({
                             outside: "text-slate-600",
                         }}
                     />
+                    {allowEmpty && selected && (
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setSelected(undefined);
+                                setOpen(false);
+                            }}
+                            className="mt-3 w-full rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 transition hover:bg-slate-800"
+                        >
+                            Quitar fecha
+                        </button>
+                    )}
                 </div>
             )}
         </div>

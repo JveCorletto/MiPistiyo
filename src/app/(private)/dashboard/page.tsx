@@ -132,6 +132,7 @@ async function DashboardContent({ searchParams }: { searchParams: Promise<PagePa
     supabase.from("historical_transactions")
       .select("id,kind,category_id,source_account_id,source_card_id,amount,effective_on,description,created_at")
       .eq("user_id", userId)
+      .is("voided_at", null)
       .order("effective_on", { ascending: false })
       .order("created_at", { ascending: false })
       .limit(18),
