@@ -98,7 +98,7 @@ export function Sidebar({ open, onClose }: Props) {
           ${open ? "translate-x-0" : "-translate-x-full"}
         `}
       >
-        <div className="flex h-20 items-center justify-between border-b border-slate-800 px-6">
+        <div className="flex h-16 shrink-0 items-center justify-between border-b border-slate-800 px-6">
           <Link
             href="/dashboard"
             aria-label="Ir al Dashboard de MiPistiyo"

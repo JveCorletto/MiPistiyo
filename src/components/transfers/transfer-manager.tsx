@@ -1,11 +1,13 @@
 "use client";
 
 import {
-  useActionState, useCallback, useEffect, useState,
+  useActionState, useCallback, useEffect, useRef, useState,
   type ReactNode,
 } from "react";
 import { useFormStatus } from "react-dom";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { DatePicker } from "@/components/ui/date-picker";
+import { takeFinanceOcrPrefill, type FinanceOcrPrefill } from "@/lib/ocr/scan-handoff";
 import {
   ArrowDownLeft, ArrowLeftRight, ArrowUpRight, Banknote,
   CheckCircle2, CreditCard, History, Landmark, Plus, X,
@@ -46,7 +48,7 @@ type Props = {
   history: FinanceHistoryItem[];
 };
 type Mode = "INTERNAL" | "EXTERNAL" | "CARD" | "LOAN";
-type Dialog = { mode: Mode; idempotencyKey: string } | null;
+type Dialog = { mode: Mode; idempotencyKey: string; prefill?: FinanceOcrPrefill } | null;
 
 const inputClass = "w-full min-w-0 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white outline-none transition focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 disabled:opacity-50";
 const labelClass = "mb-1.5 block text-xs font-medium text-slate-300";
@@ -129,11 +131,11 @@ function AccountChoices({ accounts, placeholder }: {
   </>;
 }
 
-function AmountField({ name = "amount", label = "Monto ($)" }: { name?: string; label?: string }) {
+function AmountField({ name = "amount", label = "Monto ($)", defaultValue }: { name?: string; label?: string; defaultValue?: string }) {
   return <label className="block min-w-0">
     <span className={labelClass}>{label}</span>
     <input type="number" name={name} min="0.01" step="0.01" inputMode="decimal"
-      placeholder="0.00" required className={inputClass} />
+      placeholder="0.00" defaultValue={defaultValue} required className={inputClass} />
   </label>;
 }
 
@@ -144,18 +146,19 @@ function HistoricalWarning() {
   </p>;
 }
 
-function OperationForm({ mode, keyId, accounts, cards, loans, categories, onClose, onDone }: {
+function OperationForm({ mode, keyId, accounts, cards, loans, categories, prefill, onClose, onDone }: {
   mode: Mode;
   keyId: string;
   accounts: AccountOption[];
   cards: CreditCardOption[];
   loans: LoanOption[];
   categories: CategoryOption[];
+  prefill?: FinanceOcrPrefill;
   onClose: () => void;
   onDone: (message: string) => void;
 }) {
   const [state, action] = useActionState(createFinanceOperation, ZERO_STATE);
-  const [direction, setDirection] = useState<"OUT" | "IN">("OUT");
+  const [direction, setDirection] = useState<"OUT" | "IN" | null>(prefill ? prefill.direction : "OUT");
   const [interest, setInterest] = useState("0");
   const [fees, setFees] = useState("0");
   const [principal, setPrincipal] = useState("");
@@ -166,13 +169,19 @@ function OperationForm({ mode, keyId, accounts, cards, loans, categories, onClos
 
   const expenseCategories = categories.filter((c) => c.kind === "EXPENSE" && c.is_active);
   const incomeCategories = categories.filter((c) => c.kind === "INCOME" && c.is_active);
-  const selectedExternalCategories = direction === "OUT" ? expenseCategories : incomeCategories;
+  const selectedExternalCategories = direction === "OUT" ? expenseCategories : direction === "IN" ? incomeCategories : [];
   const totalLoan = (Number(principal || 0) + Number(interest || 0) + Number(fees || 0));
 
   return (
     <form action={action} className="space-y-4">
       <input type="hidden" name="mode" value={mode} />
       <input type="hidden" name="idempotency_key" value={keyId} />
+      {prefill && <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs leading-relaxed text-emerald-200">
+        Datos sugeridos desde OCR. Revisá importe, fecha, dirección, cuenta y clasificación antes de confirmar.
+        {prefill.reference && ` Referencia sugerida: ${prefill.reference}.`}
+        {mode === "EXTERNAL" && " Una transferencia recibida no siempre es ingreso; confirmá su naturaleza contable."}
+        {mode === "LOAN" && ` El comprobante indica ${prefill.amount ? money(Number(prefill.amount)) : "un monto sin identificar"} en total. Separá correctamente capital, intereses y comisiones.`}
+      </p>}
 
       {mode === "INTERNAL" && <>
         <p className="text-sm text-slate-400">
@@ -188,7 +197,7 @@ function OperationForm({ mode, keyId, accounts, cards, loans, categories, onClos
         <FormSelect label="Cuenta de destino *" name="to_account_id">
           <AccountChoices accounts={accounts} placeholder="Seleccioná destino" />
         </FormSelect>
-        <AmountField />
+        <AmountField defaultValue={prefill?.amount} />
         <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-emerald-300">
           Se descuenta de origen y se suma al destino. El patrimonio no cambia.
         </div>
@@ -204,28 +213,31 @@ function OperationForm({ mode, keyId, accounts, cards, loans, categories, onClos
           <div className="grid grid-cols-2 gap-2">
             <label className={`cursor-pointer rounded-xl border p-3 text-sm ${direction === "OUT" ? "border-emerald-500 bg-emerald-500/10" : "border-slate-700"}`}>
               <input className="mr-2 accent-emerald-500" type="radio" name="direction" value="OUT"
-                checked={direction === "OUT"} onChange={() => setDirection("OUT")} />Enviar
+                required checked={direction === "OUT"} onChange={() => setDirection("OUT")} />Enviar
             </label>
             <label className={`cursor-pointer rounded-xl border p-3 text-sm ${direction === "IN" ? "border-emerald-500 bg-emerald-500/10" : "border-slate-700"}`}>
               <input className="mr-2 accent-emerald-500" type="radio" name="direction" value="IN"
-                checked={direction === "IN"} onChange={() => setDirection("IN")} />Recibir
+                required checked={direction === "IN"} onChange={() => setDirection("IN")} />Recibir
             </label>
           </div>
         </fieldset>
+        {direction === null && <p className="rounded-lg bg-amber-500/10 p-2 text-xs text-amber-200">
+          El comprobante no indica si esta transferencia es entrante o saliente para vos. Elegí la dirección antes de continuar.
+        </p>}
         <label className="block min-w-0">
-          <span className={labelClass}>{direction === "OUT" ? "Destinatario *" : "Remitente *"}</span>
+          <span className={labelClass}>{direction === "OUT" ? "Destinatario *" : direction === "IN" ? "Remitente *" : "Contraparte *"}</span>
           <input type="text" name="counterparty" required minLength={2} maxLength={120}
-            placeholder={direction === "OUT" ? "Ej. Juan Pérez / Empresa" : "Ej. Empleador / Cliente"}
-            className={inputClass} />
+            placeholder={direction === "OUT" ? "Ej. Juan Pérez / Empresa" : direction === "IN" ? "Ej. Empleador / Cliente" : "Seleccioná la dirección"}
+            defaultValue={prefill?.counterparty ?? ""} className={inputClass} />
         </label>
-        <FormSelect label={direction === "OUT" ? "Cuenta desde la que enviás *" : "Cuenta en la que recibís *"} name="account_id">
+        <FormSelect label={direction === "OUT" ? "Cuenta desde la que enviás *" : direction === "IN" ? "Cuenta en la que recibís *" : "Cuenta *"} name="account_id">
           <AccountChoices accounts={accounts} placeholder="Seleccioná la cuenta" />
         </FormSelect>
-        <FormSelect key={direction} label={direction === "OUT" ? "Categoría de gasto *" : "Categoría de ingreso *"} name="category_id">
+        <FormSelect key={direction} label={direction === "OUT" ? "Categoría de gasto *" : direction === "IN" ? "Categoría de ingreso *" : "Categoría *"} name="category_id">
           <option value="" disabled>Seleccioná una categoría</option>
           {selectedExternalCategories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </FormSelect>
-        <AmountField />
+        <AmountField defaultValue={prefill?.amount} />
         <p className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-200">
           Una transferencia externa no siempre representa ingreso/gasto: para mover dinero
           entre cuentas propias, registrá primero ambas en MiPistiyo y usá transferencia interna.
@@ -243,7 +255,7 @@ function OperationForm({ mode, keyId, accounts, cards, loans, categories, onClos
           {cards.filter((c) => c.is_active).map((card) =>
             <option key={card.id} value={card.id}>{card.name} · Deuda {money(card.current_debt)}</option>)}
         </FormSelect>
-        <AmountField label="Monto del abono ($)" />
+        <AmountField label="Monto del abono ($)" defaultValue={prefill?.amount} />
         <p className="rounded-lg border border-slate-700 bg-slate-950/50 p-3 text-xs text-slate-400">
           Se aplica como abono general a la tarjeta. La asignación a un estado de cuenta
           específico se implementará en una fase posterior.
@@ -294,11 +306,15 @@ function OperationForm({ mode, keyId, accounts, cards, loans, categories, onClos
       <div className="grid min-w-0 gap-3 sm:grid-cols-2 [&>*]:min-w-0">
         <label className="block min-w-0">
           <span className={labelClass}>Fecha *</span>
-          <input type="date" name="effective_on" required defaultValue={todayInSV()} className={inputClass} />
+          <DatePicker name="effective_on"
+            defaultValue={prefill ? prefill.date : todayInSV()}
+            allowEmpty={Boolean(prefill && !prefill.date)} />
         </label>
         <label className="block min-w-0">
           <span className={labelClass}>Nota (opcional)</span>
-          <input name="note" type="text" maxLength={600} placeholder="Referencia o descripción" className={inputClass} />
+          <input name="note" type="text" maxLength={600} placeholder="Referencia o descripción"
+            defaultValue={prefill?.reference ? `${prefill.institution ? `${prefill.institution} · ` : ""}Ref. ${prefill.reference}` : ""}
+            className={inputClass} />
         </label>
       </div>
 
@@ -328,15 +344,71 @@ const labels: Record<Mode, string> = {
 
 export function TransferManager({ accounts, creditCards, loans, categories, history }: Props) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // No usar un booleano permanente: Next.js puede reutilizar este componente
+  // cuando el usuario vuelve a escanear otro documento.
+  const lastHandledOcrRequest = useRef<string | null>(null);
+  const fromOcr = searchParams.get("from_ocr");
+  const ocrRequest = searchParams.get("ocr_request");
+  const requestedMode = searchParams.get("mode");
   const [dialog, setDialog] = useState<Dialog>(null);
   const [notice, setNotice] = useState("");
   const open = (mode: Mode) => setDialog({ mode, idempotencyKey: crypto.randomUUID() });
-  const close = useCallback(() => setDialog(null), []);
+
+  // No usar router.replace() inmediatamente después de setDialog():
+  // la navegación de Next.js puede volver a montar TransferManager y cerrar el modal.
+  // Limpiamos los parámetros solo al cerrar o completar el formulario.
+  const clearOcrParams = useCallback(() => {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("from_ocr")) return;
+    url.searchParams.delete("from_ocr");
+    url.searchParams.delete("mode");
+    url.searchParams.delete("ocr_request");
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${url.pathname}${url.search}${url.hash}`,
+    );
+  }, []);
+
+  const close = useCallback(() => {
+    setDialog(null);
+    clearOcrParams();
+  }, [clearOcrParams]);
+
+  useEffect(() => {
+    if (fromOcr !== "1") return;
+
+    // El ID cambia en CADA escaneo. Aunque React conserve el componente vivo,
+    // un segundo comprobante sí debe abrir un segundo formulario.
+    // "legacy" permite recibir enlaces creados antes de este parche.
+    const requestKey = ocrRequest ?? "legacy";
+    if (lastHandledOcrRequest.current === requestKey) return;
+    lastHandledOcrRequest.current = requestKey;
+
+    const scanned = takeFinanceOcrPrefill();
+    if (scanned) {
+      setNotice("");
+      setDialog({ mode: scanned.mode, idempotencyKey: crypto.randomUUID(), prefill: scanned });
+      return;
+    }
+
+    // Si el borrador expiró, abrir el modal elegido sin autocompletarlo.
+    if (requestedMode === "INTERNAL" || requestedMode === "EXTERNAL" ||
+        requestedMode === "CARD" || requestedMode === "LOAN") {
+      setDialog({ mode: requestedMode, idempotencyKey: crypto.randomUUID() });
+      setNotice("El OCR no está disponible o expiró. Completá y verificá el formulario manualmente.");
+    } else {
+      setNotice("El borrador OCR expiró o no está disponible. Seleccioná una operación manualmente.");
+    }
+  }, [fromOcr, ocrRequest, requestedMode]);
+
   const onDone = useCallback((message: string) => {
     setDialog(null);
+    clearOcrParams();
     setNotice(message);
     router.refresh();
-  }, [router]);
+  }, [router, clearOcrParams]);
 
   useEffect(() => {
     if (!notice) return;
@@ -422,7 +494,7 @@ export function TransferManager({ accounts, creditCards, loans, categories, hist
     {dialog && <Modal title={labels[dialog.mode]} onClose={close}>
       <OperationForm key={dialog.idempotencyKey} mode={dialog.mode} keyId={dialog.idempotencyKey}
         accounts={accounts} cards={creditCards} loans={loans} categories={categories}
-        onClose={close} onDone={onDone} />
+        prefill={dialog.prefill} onClose={close} onDone={onDone} />
     </Modal>}
   </div>;
 }

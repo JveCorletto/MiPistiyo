@@ -39,6 +39,7 @@ export async function createMovement(
   const sourceType = String(formData.get("source_type") ?? "");
   const sourceId = String(formData.get("source_id") ?? "");
   const note = String(formData.get("note") ?? "").trim();
+  const occurredTime = String(formData.get("occurred_time") ?? "").trim();
   const key = String(formData.get("idempotency_key") ?? "");
 
   const uuid =
@@ -84,6 +85,10 @@ export async function createMovement(
     return fail("La descripción es demasiado extensa.");
   }
 
+  if (occurredTime && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(occurredTime)) {
+    return fail("La hora debe tener formato HH:MM.");
+  }
+
   if (!["ACCOUNT", "CARD"].includes(sourceType)) {
     return fail("Selecciona una cuenta o tarjeta.");
   }
@@ -105,7 +110,7 @@ export async function createMovement(
 
   // Los movimientos históricos no afectan el libro mayor.
   // Los movimientos normales sí afectan los saldos.
-  const { error } =
+  const { data: savedMovementId, error } =
     recordMode === "HISTORICAL"
       ? await supabase.rpc(
           "post_historical_transaction",
@@ -122,6 +127,28 @@ export async function createMovement(
     return fail(error.message);
   }
 
+  // La RPC financiera devuelve el UUID registrado. La hora, si existe,
+  // se guarda por la función de metadatos (migración 007), sin tocar el ledger.
+  // Si falla, NO se revierte ni se repite automáticamente el movimiento: ya se guardó.
+  let timeWarning = "";
+  if (occurredTime) {
+    if (!savedMovementId || typeof savedMovementId !== "string") {
+      timeWarning = " La hora no pudo guardarse; agregala luego desde Editar detalles.";
+    } else {
+      const { error: timeError } = await supabase.rpc("update_movement_metadata", {
+        p_id: savedMovementId,
+        p_origin: recordMode === "HISTORICAL" ? "HISTORICAL" : "OPERATION",
+        p_description: note || null,
+        p_category_id: categoryId,
+        p_occurred_time: occurredTime,
+      });
+      if (timeError) {
+        console.error("Movimiento guardado, fallo al almacenar hora:", timeError.message);
+        timeWarning = " La hora no pudo guardarse; agregala luego desde Editar detalles.";
+      }
+    }
+  }
+
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/cuentas");
   revalidatePath("/dashboard/tarjetas");
@@ -132,8 +159,8 @@ export async function createMovement(
     error: null,
     success:
       recordMode === "HISTORICAL"
-        ? "Movimiento histórico registrado sin afectar el saldo."
-        : "Movimiento registrado correctamente.",
+        ? `Movimiento histórico registrado sin afectar el saldo.${timeWarning}`
+        : `Movimiento registrado correctamente.${timeWarning}`,
   };
 }
 export type CancelMovementState = { error: string | null; success: string | null };
@@ -189,4 +216,48 @@ export async function cancelMovement(
   ]) revalidatePath(path);
 
   return { error: null, success: "Movimiento anulado correctamente." };
+}
+
+export type EditMovementMetadataState = { error: string | null; success: string | null };
+
+/** Solo edita descripción, categoría compatible y hora opcional; nunca ledger ni saldos. */
+export async function saveMovementMetadata(
+  _previous: EditMovementMetadataState,
+  formData: FormData,
+): Promise<EditMovementMetadataState> {
+  const fail = (error: string): EditMovementMetadataState => ({ error, success: null });
+  const id = String(formData.get("id") ?? "");
+  const origin = String(formData.get("origin") ?? "");
+  const description = String(formData.get("description") ?? "").trim();
+  const category = String(formData.get("category_id") ?? "");
+  const occurredTime = String(formData.get("occurred_time") ?? "").trim();
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  if (!uuid.test(id) || !["OPERATION", "HISTORICAL"].includes(origin))
+    return fail("Movimiento inválido.");
+  if (description.length > 1000) return fail("La descripción supera 1000 caracteres.");
+  if (category && !uuid.test(category)) return fail("Categoría inválida.");
+  if (occurredTime && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(occurredTime))
+    return fail("Ingresá una hora válida en formato HH:MM.");
+
+  const supabase = await createClient();
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError || !user) return fail("Tu sesión ha expirado.");
+
+  const { error } = await supabase.rpc("update_movement_metadata", {
+    p_id: id,
+    p_origin: origin,
+    p_description: description || null,
+    p_category_id: category || null,
+    p_occurred_time: occurredTime || null,
+  });
+  if (error) return fail(error.message);
+
+  for (const path of [
+    "/dashboard", "/dashboard/movimientos", "/dashboard/presupuestos",
+    "/dashboard/transferencias", "/dashboard/cuentas", "/dashboard/tarjetas",
+    "/dashboard/prestamos", "/dashboard/recurrentes",
+  ]) revalidatePath(path);
+
+  return { error: null, success: "Detalles actualizados sin alterar los saldos." };
 }

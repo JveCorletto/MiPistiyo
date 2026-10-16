@@ -1,7 +1,11 @@
 "use client";
 
 import { useActionState, useEffect, useState } from "react";
-import { Plus, X } from "lucide-react";
+import { Plus, X, ScanText } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ReceiptScanner, type ScanDestination } from "@/components/movements/receipt-scanner";
+import { storeFinanceOcrPrefill } from "@/lib/ocr/scan-handoff";
+import type { ReceiptDraft } from "@/lib/ocr/parse-receipt";
 
 import { DatePicker } from "@/components/ui/date-picker";
 import { createMovement, type MovementState } from "@/app/(private)/dashboard/movimientos/actions";
@@ -16,6 +20,7 @@ type Source = {
     id: string;
     name: string;
     kind: string;
+    last_four?: string | null;
 };
 
 type Props = {
@@ -38,13 +43,17 @@ function MovementForm({
     cards,
     onSuccess,
     onCancel,
+    draft,
 }: Props & {
+    draft: ReceiptDraft | null;
     onSuccess: (message: string) => void;
     onCancel: () => void;
 }) {
-    const [kind, setKind] = useState<"INCOME" | "EXPENSE">("EXPENSE");
+    const [kind, setKind] = useState<"INCOME" | "EXPENSE" | null>(
+        draft && !["RECEIPT", "CARD_PURCHASE_ALERT"].includes(draft.documentType) ? null : "EXPENSE"
+    );
     const [sourceType, setSourceType] =
-        useState<"ACCOUNT" | "CARD">("ACCOUNT");
+        useState<"ACCOUNT" | "CARD">(draft?.documentType === "CARD_PURCHASE_ALERT" ? "CARD" : "ACCOUNT");
     const [recordMode, setRecordMode] = useState<"CURRENT" | "HISTORICAL">("CURRENT");
 
     const [idempotencyKey] = useState(() => crypto.randomUUID());
@@ -71,6 +80,11 @@ function MovementForm({
     }, [state.success, onSuccess]);
 
     const options = sourceType === "CARD" ? cards : accounts;
+    const matchingCards = draft?.documentType === "CARD_PURCHASE_ALERT" && draft.cardLastFour
+        ? cards.filter(c => c.kind === "CREDIT" && c.last_four?.trim() === draft.cardLastFour)
+        : [];
+    // Solo se preselecciona si existe UNA coincidencia; nunca adivinamos tarjetas.
+    const matchingCardId = matchingCards.length === 1 ? matchingCards[0].id : "";
 
     return (
         <form action={action} className="space-y-4">
@@ -79,6 +93,15 @@ function MovementForm({
                 name="idempotency_key"
                 value={idempotencyKey}
             />
+            {draft && (
+                <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs leading-relaxed text-emerald-200">
+                    Datos sugeridos por OCR. Confirmá el tipo (gasto/ingreso), monto, fecha, categoría y cuenta o tarjeta. Evitá registros duplicados.
+                    {draft.documentType === "CARD_PURCHASE_ALERT" && (
+                        <span className="mt-1 block">Compra con tarjeta{draft.cardLastFour ? ` •••• ${draft.cardLastFour}` : ""}. Confirmá el banco, tarjeta y categoría antes de guardar.</span>
+                    )}
+                    {(!draft.date || !draft.total) && " Faltan datos que deberás completar manualmente."}
+                </div>
+            )}
             <div className="grid grid-cols-2 gap-2">
                 {(["EXPENSE", "INCOME"] as const).map(k => (
                     <button
@@ -98,7 +121,7 @@ function MovementForm({
                     </button>
                 ))}
             </div>
-            <input type="hidden" name="kind" value={kind} />
+            <input type="hidden" name="kind" value={kind ?? ""} />
             <input type="hidden" name="record_mode" value={recordMode} />
 
             <fieldset className="space-y-3 rounded-xl border border-slate-700 bg-slate-950/50 p-4">
@@ -181,6 +204,7 @@ function MovementForm({
                         min="0.01"
                         step="0.01"
                         placeholder="0.00"
+                        defaultValue={draft?.total ?? ""}
                         required
                     />
                 </div>
@@ -188,10 +212,18 @@ function MovementForm({
                     <label className="mb-2 block text-sm">Fecha</label>
                     <DatePicker
                         name="date"
-                        defaultValue={today}
+                        defaultValue={draft ? draft.date : today}
+                        allowEmpty={Boolean(draft)}
                         disabled={pending}
                     />
                 </div>
+            </div>
+
+            <div>
+                <label className="mb-2 block text-sm">Hora real del movimiento (opcional)</label>
+                <input className={fieldClass} type="time" name="occurred_time" step={60}
+                    defaultValue={draft?.time ?? ""} disabled={pending} />
+                <p className="mt-1 text-xs text-slate-500">Es la hora de la compra, no la hora de la captura ni del registro.</p>
             </div>
 
             <div>
@@ -238,7 +270,7 @@ function MovementForm({
                         key={`${kind}-${sourceType}`}
                         name="source_id"
                         required
-                        defaultValue=""
+                        defaultValue={sourceType === "CARD" ? matchingCardId : ""}
                         className={fieldClass}
                     >
                         <option value="" disabled>Seleccionar</option>
@@ -261,6 +293,11 @@ function MovementForm({
                     maxLength={1000}
                     name="note"
                     placeholder="Ej. Compra de supermercado"
+                    defaultValue={draft ? (
+                        draft.documentType === "RECEIPT" || draft.documentType === "CARD_PURCHASE_ALERT"
+                            ? `Compra en ${draft.merchant || "comercio por confirmar"}${draft.documentType === "CARD_PURCHASE_ALERT" && draft.cardLastFour ? ` · tarjeta ••••${draft.cardLastFour}` : ""}`
+                            : `Comprobante ${draft.institution || draft.merchant}${draft.reference ? ` · Ref. ${draft.reference}` : ""}`
+                    ) : ""}
                 />
             </div>
 
@@ -280,7 +317,7 @@ function MovementForm({
                     Cancelar
                 </button>
                 <button
-                    disabled={pending || !categories.some(c => c.kind === kind) ||
+                    disabled={pending || !kind || !categories.some(c => c.kind === kind) ||
                         options.length === 0}
                     className="rounded-lg bg-emerald-500 px-4 py-2 font-semibold text-slate-950 disabled:opacity-50"
                 >
@@ -292,8 +329,52 @@ function MovementForm({
 }
 
 export function CreateMovementModal(props: Props) {
+    const router = useRouter();
     const [open, setOpen] = useState(false);
+    const [scanning, setScanning] = useState(false);
+    const [draft, setDraft] = useState<ReceiptDraft | null>(null);
+    const [formVersion, setFormVersion] = useState(0);
     const [message, setMessage] = useState<string | null>(null);
+
+    function showModal(withScanner: boolean) {
+        setDraft(null);
+        setFormVersion(v => v + 1);
+        setScanning(withScanner);
+        setOpen(true);
+    }
+    function useScannedData(receipt: ReceiptDraft, destination: ScanDestination) {
+        if (destination === "MOVEMENT") {
+            setDraft(receipt);
+            setFormVersion(version => version + 1);
+            setScanning(false);
+            return;
+        }
+        try {
+            // Se transmite únicamente el borrador mínimo, nunca la foto ni todo el OCR.
+            storeFinanceOcrPrefill({
+                mode: destination,
+                amount: receipt.total,
+                date: receipt.date,
+                institution: receipt.institution,
+                reference: receipt.reference,
+                counterparty: receipt.counterparty,
+                direction: receipt.suggestedDirection,
+                createdAt: Date.now(),
+            });
+            // Cada comprobante tiene un identificador propio para que el destino
+            // lo procese, incluso si Next.js conserva TransferManager montado.
+            const requestId = crypto.randomUUID();
+            closeModal();
+            router.push(`/dashboard/transferencias?from_ocr=1&mode=${destination}&ocr_request=${requestId}`);
+        } catch {
+            setMessage("No se pudo trasladar el borrador. Probá de nuevo o usá el formulario manual.");
+        }
+    }
+    function closeModal() {
+        setOpen(false);
+        setScanning(false);
+        setDraft(null);
+    }
 
     useEffect(() => {
         if (!message) return;
@@ -303,13 +384,22 @@ export function CreateMovementModal(props: Props) {
 
     return (
         <>
-            <button
-                type="button"
-                onClick={() => setOpen(true)}
-                className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-slate-950"
-            >
-                <Plus size={18} /> Nuevo movimiento
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+                <button
+                    type="button"
+                    onClick={() => showModal(false)}
+                    className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400"
+                >
+                    <Plus size={18} /> Nuevo movimiento
+                </button>
+                <button
+                    type="button"
+                    onClick={() => showModal(true)}
+                    className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2.5 text-sm font-semibold text-emerald-300 hover:bg-emerald-500/15"
+                >
+                    <ScanText size={18} /> Escanear comprobante
+                </button>
+            </div>
 
             {message && (
                 <div role="status" className="fixed right-4 top-20 z-[90] rounded-lg bg-slate-800 px-4 py-3 text-emerald-400 shadow-xl">
@@ -322,27 +412,33 @@ export function CreateMovementModal(props: Props) {
                     <div
                         role="dialog"
                         aria-modal="true"
-                        aria-label="Nuevo movimiento"
+                        aria-label={scanning ? "Escanear comprobante" : "Nuevo movimiento"}
                         className="max-h-[90dvh] w-full max-w-lg overflow-y-auto overflow-x-hidden rounded-2xl border border-slate-700 bg-slate-900 p-6 text-white shadow-2xl">
                         <div className="mb-5 flex items-center justify-between">
                             <h2 className="text-xl font-semibold">
-                                Nuevo movimiento
+                                {scanning ? "Escanear comprobante" : "Nuevo movimiento"}
                             </h2>
-                            <button
-                                onClick={() => setOpen(false)}
-                                aria-label="Cerrar"
-                            >
+                            <button type="button" onClick={closeModal} aria-label="Cerrar" className="rounded-lg p-1 hover:bg-slate-800">
                                 <X size={20} />
                             </button>
                         </div>
-                        <MovementForm
-                            {...props}
-                            onCancel={() => setOpen(false)}
-                            onSuccess={text => {
-                                setOpen(false);
-                                setMessage(text);
-                            }}
-                        />
+                        {scanning ? (
+                            <ReceiptScanner
+                                onManual={() => { setDraft(null); setFormVersion(v => v + 1); setScanning(false); }}
+                                onUse={useScannedData}
+                            />
+                        ) : (
+                            <MovementForm
+                                key={formVersion}
+                                {...props}
+                                draft={draft}
+                                onCancel={closeModal}
+                                onSuccess={(text) => {
+                                    closeModal();
+                                    setMessage(text);
+                                }}
+                            />
+                        )}
                     </div>
                 </div>
             )}

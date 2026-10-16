@@ -5,6 +5,7 @@ import { Download, Search, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { CreateMovementModal } from "@/components/movements/create-movement-modal";
 import { HistoryManager } from "@/components/movements/history-manager";
+import { buildReversalImpacts, findPotentialDuplicates, type LedgerSnapshot } from "@/lib/movements/duplicates";
 import { DatePicker } from "@/components/ui/date-picker";
 import {
   HISTORY_PAGE_SIZE, historyQuery, historyTypes, historyUrl,
@@ -23,17 +24,23 @@ async function MovementsContent({ searchParams }: { searchParams: Promise<Search
     return <p role="alert" className="rounded-lg bg-red-500/10 p-4 text-red-300">Tu sesión ha expirado.</p>;
   }
 
-  const [categoriesResult, accountsResult, cardsResult, loansResult, historyResult] = await Promise.all([
+  const [categoriesResult, accountsResult, cardsResult, loansResult, historyResult, duplicatePoolResult] = await Promise.all([
     supabase.from("categories").select("id,name,kind,is_active").eq("user_id", user.id).order("name"),
     supabase.from("accounts").select("id,name,kind,is_active").eq("user_id", user.id).order("name"),
-    supabase.from("cards").select("id,name,kind,is_active").eq("user_id", user.id).order("name"),
+    supabase.from("cards").select("id,name,kind,is_active,last_four").eq("user_id", user.id).order("name"),
     supabase.from("loans").select("id,name,is_active").eq("user_id", user.id).order("name"),
     historyQuery(supabase, user.id, filters)
       .range((filters.page - 1) * HISTORY_PAGE_SIZE, filters.page * HISTORY_PAGE_SIZE - 1),
+    supabase.from("v_movement_history")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("is_reversed", false)
+      .order("created_at", { ascending: false })
+      .limit(1000),
   ]);
 
   const error = categoriesResult.error ?? accountsResult.error ?? cardsResult.error
-    ?? loansResult.error ?? historyResult.error;
+    ?? loansResult.error ?? historyResult.error ?? duplicatePoolResult.error;
   if (error) return (
     <p role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-red-300">
       No se pudo cargar el historial: {error.message}
@@ -47,6 +54,29 @@ async function MovementsContent({ searchParams }: { searchParams: Promise<Search
   const movements = (historyResult.data ?? []) as HistoryRow[];
   const total = historyResult.count ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE));
+
+  // Advertencias orientativas; nunca anulan automáticamente.
+  // Se comparan hasta las 1000 operaciones vigentes más recientes.
+  const duplicateMatches = findPotentialDuplicates((duplicatePoolResult.data ?? []) as HistoryRow[]);
+  const operationIds = movements.filter(row => row.origin === "OPERATION" && !row.is_reversed).map(row => row.id);
+  const ledgerResult = operationIds.length
+    ? await supabase.from("ledger_entries")
+        .select("operation_id,account_id,card_id,loan_id,delta")
+        .eq("user_id", user.id).in("operation_id", operationIds)
+    : { data: [] as LedgerSnapshot[], error: null };
+  if (ledgerResult.error) return (
+    <p role="alert" className="rounded-lg bg-red-500/10 p-4 text-red-300">
+      No se pudieron consultar los impactos contables: {ledgerResult.error.message}
+    </p>
+  );
+  const names = {
+    accounts: Object.fromEntries(accounts.map(a => [a.id, a.name])),
+    cards: Object.fromEntries(cards.map(c => [c.id, c.name])),
+    loans: Object.fromEntries(loans.map(l => [l.id, l.name])),
+  };
+  const reversalImpacts = buildReversalImpacts(
+    (ledgerResult.data ?? []) as LedgerSnapshot[], names,
+  );
 
   return <div className="space-y-6">
     <header className="flex flex-wrap items-start justify-between gap-4">
@@ -160,7 +190,7 @@ async function MovementsContent({ searchParams }: { searchParams: Promise<Search
         </div>
         <p className="text-xs text-slate-500">Ordenado por fecha efectiva (más reciente primero)</p>
       </div>
-      <HistoryManager items={movements} />
+      <HistoryManager items={movements} duplicateMatches={duplicateMatches} reversalImpacts={reversalImpacts} categories={categories} />
       {totalPages > 1 && <nav aria-label="Paginación del historial" className="flex items-center justify-between gap-3 pt-2">
         {filters.page > 1 ? <Link href={historyUrl(filters, filters.page - 1)} className="rounded-lg border border-slate-700 px-4 py-2 text-sm hover:bg-slate-800">← Anterior</Link>
           : <span className="rounded-lg border border-slate-800 px-4 py-2 text-sm text-slate-600">← Anterior</span>}

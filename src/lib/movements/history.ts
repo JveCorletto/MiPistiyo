@@ -23,6 +23,7 @@ export type HistoryRow = {
   kind: string;
   effective_on: string;
   created_at: string;
+  occurred_time: string | null;
   description: string | null;
   amount: number | string | null;
   category_id: string | null;
